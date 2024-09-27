@@ -1,0 +1,157 @@
+//@version=5
+strategy("MA Donchian Defensive Delay", overlay=true)
+
+// === Long Trades Section ===
+var sectionTitleLong = "----- Long Trades Settings -----"
+
+// Long MAs and Donchian
+longMaLengthLong = input(200, title="Long-Term MA Length", group=sectionTitleLong)
+shortMaLengthLong = input(2, title="Short-Term MA Length", group=sectionTitleLong)
+donchianLengthLong = input(20, title="Donchian Channel Length", group=sectionTitleLong)
+
+// Long Trade Toggles
+enableLongs = input(true, title="Enable Long Trades", group=sectionTitleLong)
+useSlowMaForLongEntry = input(true, title="Enable Long-Term MA for Entry", group=sectionTitleLong)
+useFastMaForLongEntry = input(false, title="Enable Short-Term MA for Entry", group=sectionTitleLong)
+useInitialStopLossLong = input(false, title="Enable Initial Stop Loss", group=sectionTitleLong)
+riskPercentLong = input(15, title="Initial Stop Loss (%)", group=sectionTitleLong)
+noNewLowsDaysLong = input(12, title="Days Without New Lows to Re-enter (Long)", group=sectionTitleLong)
+useDonchianStopLossLong = input(true, title="Enable Donchian Stop Loss for Long Trades", group=sectionTitleLong)
+
+// New EMA Inputs for Long Trades
+fastEmaLengthLong = input(10, title="Fast EMA Length (Long)", group=sectionTitleLong)
+slowEmaLengthLong = input(20, title="Slow EMA Length (Long)", group=sectionTitleLong)
+useEmaCrossoverExitLong = input(false, title="Enable EMA Crossover Exit for Long Trades", group=sectionTitleLong)
+
+// === Short Trades Section ===
+var sectionTitleShort = "----- Short Trades Settings -----"
+
+// Short MAs and Donchian
+longMaLengthShort = input(200, title="Long-Term MA Length", group=sectionTitleShort)
+shortMaLengthShort = input(2, title="Short-Term MA Length", group=sectionTitleShort)
+donchianLengthShort = input(20, title="Donchian Channel Length", group=sectionTitleShort)
+
+// Short Trade Toggles
+enableShorts = input(false, title="Enable Short Trades", group=sectionTitleShort)
+useLongMaForShortEntry = input(true, title="Enable Long-Term MA for Entry", group=sectionTitleShort)
+useShortMaForShortEntry = input(true, title="Enable Short-Term MA for Entry", group=sectionTitleShort)
+useInitialStopLossShort = input(false, title="Enable Initial Stop Loss", group=sectionTitleShort)
+riskPercentShort = input(15, title="Initial Stop Loss (%)", group=sectionTitleShort)
+noNewLowsDaysShort = input(12, title="Days Without New Highs to Re-enter (Short)", group=sectionTitleShort)
+useDonchianStopLossShort = input(true, title="Enable Donchian Stop Loss for Short Trades", group=sectionTitleShort)
+
+// Backtest date range inputs
+backtestStart = input.time(timestamp("2020-01-01 00:00"), title="Backtest Start Date")
+backtestEnd = input.time(timestamp("2100-01-01 00:00"), title="Backtest End Date")
+
+// Moving Averages for long and short trades
+longMaLong = ta.sma(close, longMaLengthLong)
+shortMaLong = ta.sma(close, shortMaLengthLong)
+longMaShort = ta.sma(close, longMaLengthShort)
+shortMaShort = ta.sma(close, shortMaLengthShort)
+
+// Donchian Channel for long and short trades
+donchianLowLong = ta.lowest(low, donchianLengthLong)  // Low for long trades
+donchianHighShort = ta.highest(high, donchianLengthShort)  // High for short trades
+
+// EMA calculation for long trades
+fastEmaLong = ta.ema(close, fastEmaLengthLong)
+slowEmaLong = ta.ema(close, slowEmaLengthLong)
+
+// Conditions for long entry: Price above the MAs if enabled
+longEntryCondition = enableLongs and (not useSlowMaForLongEntry or close > longMaLong) and (not useFastMaForLongEntry or close > shortMaLong)
+
+// Conditions for short entry: Price below the MAs if enabled
+shortEntryCondition = enableShorts and (not useLongMaForShortEntry or close < longMaShort) and (not useShortMaForShortEntry or close < shortMaShort)
+
+// Define variables for stop loss and entry
+var float donchianStopLossLong = na
+var float donchianStopLossShort = na
+var float initialStopLossLong = na
+var float initialStopLossShort = na
+var float entryPrice = na
+var bool stopLossTriggered = false  // Track if a stop loss was triggered
+var int daysSinceDonchianExitLong = na  // Track days since the last Donchian stop loss exit (long)
+var int daysSinceDonchianExitShort = na  // Track days since the last Donchian stop loss exit (short)
+
+// Adjust visuals with transparency
+colorLongMa = color.new(color.blue, 70)  // 70% transparency
+colorShortMa = color.new(color.orange, 70)  // 70% transparency
+colorDonchianLow = color.new(color.red, 70)  // 70% transparency
+colorDonchianHigh = color.new(color.green, 70)  // 70% transparency
+
+// Plot moving averages
+plot(longMaLong, "Long-Term MA (Long)", color=colorLongMa, linewidth=2)
+plot(shortMaLong, "Short-Term MA (Long)", color=colorShortMa, linewidth=2)
+plot(longMaShort, "Long-Term MA (Short)", color=colorLongMa, linewidth=2)
+plot(shortMaShort, "Short-Term MA (Short)", color=colorShortMa, linewidth=2)
+plot(fastEmaLong, "Fast EMA (Long)", color=color.green, linewidth=2)
+plot(slowEmaLong, "Slow EMA (Long)", color=color.red, linewidth=2)
+
+
+// Plot Donchian Channel bands
+plot(donchianLowLong, "Donchian Lower Band (Long)", color=colorDonchianLow, linewidth=2)
+plot(donchianHighShort, "Donchian Upper Band (Short)", color=colorDonchianHigh, linewidth=2)
+
+// Filter trades based on the backtest date range
+inDateRange = (time >= backtestStart and time <= backtestEnd)
+
+// Long entry logic
+if not stopLossTriggered and longEntryCondition and inDateRange
+    strategy.entry("Long", strategy.long)
+    entryPrice := close
+    if useInitialStopLossLong
+        initialStopLossLong := entryPrice * (1 - riskPercentLong / 100)  // Set initial stop loss at a percentage below the entry price
+    if useDonchianStopLossLong
+        donchianStopLossLong := donchianLowLong  // Initialize Donchian stop loss for long trades
+    stopLossTriggered := false  // Reset stop loss flag on a new trade
+    daysSinceDonchianExitLong := 0  // Reset days counter
+
+// Short entry logic
+if not stopLossTriggered and shortEntryCondition and inDateRange
+    strategy.entry("Short", strategy.short)
+    entryPrice := close
+    if useInitialStopLossShort
+        initialStopLossShort := entryPrice * (1 + riskPercentShort / 100)  // Set initial stop loss at a percentage above the entry price
+    if useDonchianStopLossShort
+        donchianStopLossShort := donchianHighShort  // Initialize Donchian stop loss for short trades
+    stopLossTriggered := false  // Reset stop loss flag on a new trade
+    daysSinceDonchianExitShort := 0  // Reset days counter
+
+// Long stop loss logic
+if strategy.position_size > 0
+    // Update Donchian Channel-based stop loss for long trades
+    if useDonchianStopLossLong
+        donchianStopLossLong := donchianLowLong
+    
+    // Exit the trade if the price falls below the Donchian or initial stop loss
+    if (useDonchianStopLossLong and low <= donchianStopLossLong) or (useInitialStopLossLong and close <= initialStopLossLong) or (useEmaCrossoverExitLong and fastEmaLong < slowEmaLong)
+        strategy.close("Long")
+        stopLossTriggered := true  // Set flag to prevent re-entry until condition is met
+
+// Short stop loss logic
+if strategy.position_size < 0
+    // Update Donchian Channel-based stop loss for short trades
+    if useDonchianStopLossShort
+        donchianStopLossShort := donchianHighShort
+    
+    // Exit the trade if the price rises above the Donchian or initial stop loss
+    if (useDonchianStopLossShort and high >= donchianStopLossShort) or (useInitialStopLossShort and close >= initialStopLossShort)
+        strategy.close("Short")
+        stopLossTriggered := true  // Set flag to prevent re-entry until condition is met
+
+// Re-entry logic for long trades
+if stopLossTriggered
+    daysSinceDonchianExitLong := na(daysSinceDonchianExitLong) ? 0 : daysSinceDonchianExitLong + 1  // Increment days counter (long)
+    
+    if daysSinceDonchianExitLong >= noNewLowsDaysLong and longEntryCondition
+        strategy.entry("Long", strategy.long)
+        stopLossTriggered := false  // Ready to re-enter
+
+// Re-entry logic for short trades
+if stopLossTriggered
+    daysSinceDonchianExitShort := na(daysSinceDonchianExitShort) ? 0 : daysSinceDonchianExitShort + 1  // Increment days counter (short)
+    
+    if daysSinceDonchianExitShort >= noNewLowsDaysShort and shortEntryCondition
+        strategy.entry("Short", strategy.short)
+        stopLossTriggered := false  // Ready to re-enter
