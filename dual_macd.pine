@@ -1,0 +1,143 @@
+//@version=5
+strategy("Dual MACD + RSI Filter", overlay=true)
+
+// === Backtesting Inputs ===
+startDate = input.time(timestamp("2020-01-01 00:00"), title="Backtest Start Date", group="Backtesting")
+endDate = input.time(timestamp("2100-01-01 00:00"), title="Backtest End Date", group="Backtesting")
+
+// Restrict trading to the selected backtest period
+withinBacktestPeriod = (time >= startDate) and (time <= endDate)
+
+// === Inputs ===
+// Slow MACD Inputs (Weekly or Monthly) with Multiplier
+slowMacdFastLength = input(12, title="Slow MACD Fast Length", group="MACD Settings")
+slowMacdSlowLength = input(26, title="Slow MACD Slow Length", group="MACD Settings")
+slowMacdSignalSmoothing = input(9, title="Slow MACD Signal Smoothing", group="MACD Settings")
+slowMultiplier = input(5, title="Slow Multiplier for Fast Data", group="MACD Settings") // Multiplier to simulate slow chart behavior (weekly for daily, or monthly for weekly)
+
+// Fast MACD Inputs (Daily or Weekly)
+fastMacdFastLength = input(12, title="Fast MACD Fast Length", group="MACD Settings")
+fastMacdSlowLength = input(26, title="Fast MACD Slow Length", group="MACD Settings")
+fastMacdSignalSmoothing = input(9, title="Fast MACD Signal Smoothing", group="MACD Settings")
+
+// RSI Filter Inputs
+enableRSIFilter = input(true, title="Enable RSI Filter for Long", group="RSI Filter")
+rsiLength = input(14, title="RSI Length", group="RSI Filter")
+rsiThreshold = input(50, title="RSI Threshold for Long Entries", group="RSI Filter") // RSI filter for long positions
+
+// Donchian Stop Loss Inputs
+donchianLength = input(8, title="Donchian Channel Length", group="Stop Loss Settings")
+useDonchianStopLoss = input(true, title="Enable Donchian Stop Loss", group="Stop Loss Settings")
+
+// Exit Mechanism Dropdown
+exitMethod = input.string("Wick Stop Loss", title="Exit Mechanism", options=["MACD Crossover", "Wick Stop Loss"])
+
+// === Long Trade Inputs ===
+enableLong = input(true, title="Enable Long Positions", group="Long Positions")
+
+// === Short Trade Inputs ===
+enableShort = input(true, title="Enable Short Positions", group="Short Positions")
+
+// === Slow MACD Calculation (Weekly or Monthly) ===
+// Modify slow MACD using multiplier on fast chart to mimic slow chart behavior
+macdSlowLine = ta.ema(close, slowMacdFastLength * slowMultiplier) - ta.ema(close, slowMacdSlowLength * slowMultiplier)
+signalSlowLine = ta.ema(macdSlowLine, slowMacdSignalSmoothing * slowMultiplier)
+
+// === Fast MACD Calculation (Daily or Weekly) ===
+[macdFastLine, signalFastLine, _] = ta.macd(close, fastMacdFastLength, fastMacdSlowLength, fastMacdSignalSmoothing)
+
+// === RSI Calculation ===
+rsiValue = ta.rsi(close, rsiLength)
+
+// === Conditions ===
+// Slow MACD condition: MACD line above signal line for long, below for short
+slowMacdConditionLong = macdSlowLine > signalSlowLine
+slowMacdConditionShort = macdSlowLine < signalSlowLine
+
+// Fast MACD condition: MACD line above signal line for long, below for short
+fastMacdConditionLong = macdFastLine > signalFastLine
+fastMacdConditionShort = macdFastLine < signalFastLine
+
+// RSI condition: RSI value must be above the threshold (default is 50) for long trades
+rsiCondition = rsiValue > rsiThreshold
+
+// Combined entry condition for long: Slow MACD, Fast MACD, RSI, and within backtest period
+longEntryCondition = slowMacdConditionLong and fastMacdConditionLong and (not enableRSIFilter or rsiCondition) and withinBacktestPeriod and enableLong
+
+// Combined entry condition for short: Slow MACD and Fast MACD are both below signal line, within backtest period
+shortEntryCondition = slowMacdConditionShort and fastMacdConditionShort and withinBacktestPeriod and enableShort
+
+// === Donchian Stop Loss ===
+// Calculate Donchian lower band (for long trades) and upper band (for short trades)
+donchianLow = ta.lowest(low, donchianLength)
+donchianHigh = ta.highest(high, donchianLength)
+
+// === Wick Stop Loss ===
+// Variable to store the bottom wick of the last closed candle for long and top wick for short
+var float wickStopLossLevelLong = na
+var float wickStopLossLevelShort = na
+
+// Set stop loss at the bottom wick of the last closed candle on fast MACD crossover for long
+if (ta.crossover(signalFastLine, macdFastLine))
+    wickStopLossLevelLong := low[1] // Use the bottom of the previous candle's wick for long trades
+
+// Set stop loss at the top wick of the last closed candle on fast MACD crossunder for short
+if (ta.crossunder(macdFastLine, signalFastLine))
+    wickStopLossLevelShort := high[1] // Use the top of the previous candle's wick for short trades
+
+// === Trading Logic ===
+// Enter long position if MACD and RSI conditions are met
+if (longEntryCondition)
+    strategy.entry("Long", strategy.long)
+
+// Enter short position if both MACD conditions are met
+if (shortEntryCondition)
+    strategy.entry("Short", strategy.short)
+
+// Stop loss logic based on Donchian channel
+if (useDonchianStopLoss and strategy.position_size > 0)
+    if (strategy.position_size > 0 and low <= donchianLow)
+        strategy.close("Long", "Donchian Stop Loss Hit")
+    if (strategy.position_size < 0 and high >= donchianHigh)
+        strategy.close("Short", "Donchian Stop Loss Hit")
+
+// Exit logic based on the selected exit method
+if (strategy.position_size > 0)
+    if (exitMethod == "MACD Crossover" and macdFastLine < signalFastLine)
+        strategy.close("Long", "MACD Exit")
+    else if (exitMethod == "Wick Stop Loss" and not na(wickStopLossLevelLong) and low <= wickStopLossLevelLong)
+        strategy.close("Long", "Wick Stop Loss Hit")
+
+if (strategy.position_size < 0)
+    if (exitMethod == "MACD Crossover" and macdFastLine > signalFastLine)
+        strategy.close("Short", "MACD Exit")
+    else if (exitMethod == "Wick Stop Loss" and not na(wickStopLossLevelShort) and high >= wickStopLossLevelShort)
+        strategy.close("Short", "Wick Stop Loss Hit")
+
+// === Plotting ===
+// Plot Fast MACD and Signal lines in a separate pane
+fastMacdPlot = hline(0, "0 Line", color=color.gray)
+plot(macdFastLine, title="Fast MACD Line", color=color.blue, offset=0)
+plot(signalFastLine, title="Fast Signal Line", color=color.red, offset=0)
+
+// Plot Fast MACD Histogram in the same pane as Fast MACD
+macdHistogram = macdFastLine - signalFastLine
+plot(macdHistogram, title="Fast MACD Histogram", color=color.new(color.blue, 0), style=plot.style_histogram)
+
+// Plot Slow MACD and Signal lines in a separate pane
+slowMacdPlot = hline(0, "0 Line", color=color.gray)
+plot(macdSlowLine, title="Slow MACD Line", color=color.green, offset=0, trackprice=false)
+plot(signalSlowLine, title="Slow Signal Line", color=color.orange, offset=0, trackprice=false)
+
+// Plot RSI in a separate pane
+indicator("RSI", overlay=false)  // RSI in its own pane
+plot(rsiValue, title="RSI", color=color.purple)
+hline(rsiThreshold, title="RSI Threshold", color=color.gray)
+
+// Plot Donchian channel lower band (in price chart pane) and upper band for short trades
+plot(useDonchianStopLoss ? donchianLow : na, title="Donchian Lower Band", color=color.new(color.red, 60), force_overlay=true)
+plot(useDonchianStopLoss ? donchianHigh : na, title="Donchian Upper Band", color=color.new(color.green, 60), force_overlay=true)
+
+// Plot Wick Stop Loss Levels for both long and short
+plot(exitMethod == "Wick Stop Loss" and not na(wickStopLossLevelLong) ? wickStopLossLevelLong : na, title="Wick Stop Loss Level Long", color=color.purple, linewidth=2, force_overlay=true)
+plot(exitMethod == "Wick Stop Loss" and not na(wickStopLossLevelShort) ? wickStopLossLevelShort : na, title="Wick Stop Loss Level Short", color=color.red, linewidth=2, force_overlay=true)

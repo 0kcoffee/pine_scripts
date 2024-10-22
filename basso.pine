@@ -1,0 +1,169 @@
+//@version=5
+strategy("Modified Basso Trend Breakout 2", overlay=true)
+
+// === Input Parameters ===
+// Bands Settings
+var sectionTitleGlobal = "Global Settings (Long)"
+upperBandLength = input.int(21, title="Upper Bands Length", minval=1, group=sectionTitleGlobal)
+lowerBandLength = input.int(21, title="Lower Bands Length", minval=1, group=sectionTitleGlobal)
+
+// Long Trades Toggle
+enableLong = input(true, title="Enable Long Trades?", group="Trade Direction - Long")
+var sectionTitleBollinger = "Bollinger Bands Settings (Long)"
+// bollingerLength = input.int(21, title="Bollinger Bands Length", minval=1, group=sectionTitleBollinger)
+bollingerMult = input.float(2.0, title="Bollinger Bands Multiplier", minval=0.1, group=sectionTitleBollinger)
+bollingerEntryToggle = input(true, title="Use Bollinger Bands for Long Entry?", group=sectionTitleBollinger)
+bollingerExitToggle = input(true, title="Use Bollinger Bands for Long Exit?", group=sectionTitleBollinger)
+
+var sectionTitleDonchian = "Donchian Channel Settings (Long)"
+// donchianLength = input.int(21, title="Donchian Channel Length", minval=1, group=sectionTitleDonchian)
+donchianEntryToggle = input(true, title="Use Donchian Channel for Long Entry?", group=sectionTitleDonchian)
+donchianExitToggle = input(true, title="Use Donchian Channel for Long Exit?", group=sectionTitleDonchian)
+
+var sectionTitleKeltner = "Keltner Channel Settings (Long)"
+// keltnerLength = input.int(21, title="Keltner Channel Length", minval=1, group=sectionTitleKeltner)
+keltnerMult = input.float(1.5, title="Keltner Channel Multiplier", minval=0.1, group=sectionTitleKeltner)
+keltnerEntryToggle = input(true, title="Use Keltner Channel for Long Entry?", group=sectionTitleKeltner)
+keltnerExitToggle = input(true, title="Use Keltner Channel for Long Exit?", group=sectionTitleKeltner)
+
+// Short Trades Toggle
+// enableShort = input(true, title="Enable Short Trades?", group="Trade Direction - Short")
+// var sectionTitleBollingerShort = "Bollinger Bands Settings (Short)"
+// bollingerShortEntryToggle = input(true, title="Use Bollinger Bands for Short Entry?", group=sectionTitleBollingerShort)
+// bollingerShortExitToggle = input(true, title="Use Bollinger Bands for Short Exit?", group=sectionTitleBollingerShort)
+
+// var sectionTitleDonchianShort = "Donchian Channel Settings (Short)"
+// donchianShortEntryToggle = input(true, title="Use Donchian Channel for Short Entry?", group=sectionTitleDonchianShort)
+// donchianShortExitToggle = input(true, title="Use Donchian Channel for Short Exit?", group=sectionTitleDonchianShort)
+
+// var sectionTitleKeltnerShort = "Keltner Channel Settings (Short)"
+// keltnerShortEntryToggle = input(true, title="Use Keltner Channel for Short Entry?", group=sectionTitleKeltnerShort)
+// keltnerShortExitToggle = input(true, title="Use Keltner Channel for Short Exit?", group=sectionTitleKeltnerShort)
+
+// 200 SMA Filter Toggle
+var sectionTitleSMA = "SMA Filter Settings"
+smaLength = input.int(200, title="SMA Length", minval=1, group=sectionTitleSMA)
+enableSMAFilter = input(true, title="Enable 200 SMA Filter?", group=sectionTitleSMA)
+useSMAAsStopLoss = input(true, title="Use 200 SMA as a Stop Loss?", group=sectionTitleSMA)
+
+// New SMA filter based on different asset (e.g., QQQ)
+var sectionTitleAltSMA = "Alternate SMA Filter Settings"
+altAsset = input.symbol("QQQ", title="Alternate Asset Symbol", group=sectionTitleAltSMA)
+enableAltSMAFilter = input(true, title="Enable Alt SMA Filter?", group=sectionTitleAltSMA)
+altSMALength = input.int(200, title="Alt SMA Length", minval=1, group=sectionTitleAltSMA)
+
+// Backtesting Date Range
+var sectionTitleBacktest = "Backtest Settings"
+backtestStart = input.time(timestamp("2020-01-01 00:00"), title="Backtest Start Date", group=sectionTitleBacktest)
+backtestEnd = input.time(timestamp("2100-01-01 00:00"), title="Backtest End Date", group=sectionTitleBacktest)
+
+// === Indicators Calculation ===
+// Bollinger Bands (Long)
+basisUpper = ta.sma(close, upperBandLength)
+basisLower = ta.sma(close, lowerBandLength)
+devUpper = bollingerMult * ta.stdev(close, upperBandLength)
+devLower = bollingerMult * ta.stdev(close, lowerBandLength)
+bollingerUpper = basisUpper + devUpper
+bollingerLower = basisLower - devLower
+
+// Donchian Channel (Long)
+donchianHigh = ta.highest(high, upperBandLength)
+donchianLow = ta.lowest(low, lowerBandLength)
+
+// Keltner Channel (Long)
+keltnerUpper = ta.sma(close, upperBandLength) + keltnerMult * ta.atr(upperBandLength)
+keltnerLower = ta.sma(close, lowerBandLength) - keltnerMult * ta.atr(lowerBandLength)
+
+// Bollinger Bands (Short)
+// bollingerShortUpper = basis + dev
+// bollingerShortLower = basis - dev
+
+// // Donchian Channel (Short)
+// donchianShortHigh = ta.highest(high, donchianLength)
+// donchianShortLow = ta.lowest(low, donchianLength)
+
+// // Keltner Channel (Short)
+// keltnerShortBasis = ta.sma(close, keltnerLength)
+// keltnerShortUpper = keltnerShortBasis + keltnerMult * ta.atr(keltnerLength)
+// keltnerShortLower = keltnerShortBasis - keltnerMult * ta.atr(keltnerLength)
+
+// 200 SMA
+sma200 = ta.sma(close, smaLength)
+
+// Alternate SMA based on different asset
+altSma200 = request.security(altAsset, timeframe.period, ta.sma(close, altSMALength))
+altAssetClose = request.security(altAsset, timeframe.period, close)
+
+
+// Track previous Donchian Channel high/low to detect new highs/lows
+var float prevDonchianHigh = na
+var float prevDonchianLow = na
+var float prevDonchianShortHigh = na
+var float prevDonchianShortLow = na
+
+// Update previous Donchian values
+prevDonchianHigh := donchianHigh[1]
+prevDonchianLow := donchianLow[1]
+// prevDonchianShortHigh := donchianShortHigh[1]
+// prevDonchianShortLow := donchianShortLow[1]
+
+// === Conditions for Entry and Exit ===
+// Long Entry condition: price is above 200 SMA (if enabled) and the Donchian upper band makes a new high
+bollingerEntryCondition = bollingerEntryToggle and close >= bollingerUpper
+donchianEntryCondition = donchianEntryToggle and donchianHigh > prevDonchianHigh // Donchian: new high created
+keltnerEntryCondition = keltnerEntryToggle and close >= keltnerUpper
+
+smaFilterConditionLong = not enableSMAFilter or close > sma200 // Toggle for SMA Filter
+altSMAFilterConditionLong = not enableAltSMAFilter or altAssetClose > altSma200
+entryCondition = (bollingerEntryCondition or donchianEntryCondition or keltnerEntryCondition) and smaFilterConditionLong and altSMAFilterConditionLong
+
+// Long Exit condition: price hits the lower band, Donchian lower band makes a new low, or price crosses below 200 SMA (if SMA as stop loss is enabled)
+bollingerExitCondition = bollingerExitToggle and close <= bollingerLower
+donchianExitCondition = donchianExitToggle and donchianLow < prevDonchianLow // Donchian: new low created
+keltnerExitCondition = keltnerExitToggle and close <= keltnerLower
+smaStopLossConditionLong = useSMAAsStopLoss and close < sma200 // SMA stop loss for long trades
+
+exitCondition = bollingerExitCondition or donchianExitCondition or keltnerExitCondition or smaStopLossConditionLong
+
+// // Short Entry condition: price is below 200 SMA (if enabled) and the Donchian lower band makes a new low
+// bollingerShortEntryCondition = bollingerShortEntryToggle and close <= bollingerShortLower
+// donchianShortEntryCondition = donchianShortEntryToggle and donchianShortLow < prevDonchianShortLow // Donchian: new low created
+// keltnerShortEntryCondition = keltnerShortEntryToggle and close <= keltnerShortLower
+
+// smaFilterConditionShort = not enableSMAFilter or close < sma200 // Toggle for SMA Filter
+// altSMAFilterConditionShort = not enableAltSMAFilter or altSma200 < close // Alternate asset must be below its SMA to enter short
+// shortEntryCondition = (bollingerShortEntryCondition or donchianShortEntryCondition or keltnerShortEntryCondition) and smaFilterConditionShort and altSMAFilterConditionShort
+
+// // Short Exit condition: price hits the upper band, Donchian upper band makes a new high, or price crosses above 200 SMA (if SMA as stop loss is enabled)
+// bollingerShortExitCondition = bollingerShortExitToggle and close >= bollingerShortUpper
+// donchianShortExitCondition = donchianShortExitToggle and donchianShortHigh > prevDonchianShortHigh // Donchian: new high created
+// keltnerShortExitCondition = keltnerShortExitToggle and close >= keltnerShortUpper
+// smaStopLossConditionShort = useSMAAsStopLoss and close > sma200 // SMA stop loss for short trades
+
+// shortExitCondition = bollingerShortExitCondition or donchianShortExitCondition or keltnerShortExitCondition or smaStopLossConditionShort
+
+// === Strategy Execution ===
+// Long Trades
+if (enableLong and entryCondition and (time >= backtestStart and time <= backtestEnd))
+    strategy.entry("Long", strategy.long)
+
+if (enableLong and exitCondition)
+    strategy.close("Long")
+
+// Short Trades
+// if (enableShort and shortEntryCondition and (time >= backtestStart and time <= backtestEnd))
+//     strategy.entry("Short", strategy.short)
+
+// if (enableShort and shortExitCondition)
+//     strategy.close("Short")
+
+// Plot 200 SMA and alternate asset SMA
+plot(enableSMAFilter ? sma200 : na, title="200 SMA", color=color.red, linewidth=2)
+plot(enableAltSMAFilter ? altSma200 : na, title="Alt Asset SMA", color=color.blue, linewidth=2)
+// Long Plots
+plot(bollingerUpper, color=color.green, linewidth=2, title="Bollinger Upper (Long)")
+plot(bollingerLower, color=color.red, linewidth=2, title="Bollinger Lower (Long)")
+plot(donchianHigh, color=color.purple, linewidth=2, title="Donchian High (Long)")
+plot(donchianLow, color=color.orange, linewidth=2, title="Donchian Low (Long)")
+plot(keltnerUpper, color=color.yellow, linewidth=2, title="Keltner Upper (Long)")
+plot(keltnerLower, color=color.yellow, linewidth=2, title="Keltner Lower (Long)")
